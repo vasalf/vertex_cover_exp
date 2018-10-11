@@ -1,3 +1,5 @@
+#include <ascii_table/ascii_table.h>
+
 #include <bits/stdc++.h>
 
 class ProblemInstance {
@@ -254,6 +256,10 @@ struct LPKernel {
                 graph.takeVertex(i);
         }
     }
+
+    static std::string method() {
+        return "LP";
+    }
 };
 
 struct CrownKernel {
@@ -322,6 +328,10 @@ struct CrownKernel {
             if (graph.adjacent(u).empty())
                 graph.removeVertex(u);
     }
+
+    static std::string method() {
+        return "Crown";
+    }
 };
 
 struct ExhaustiveCrownKernel {
@@ -335,6 +345,10 @@ struct ExhaustiveCrownKernel {
             size = graph.size();
             CrownKernel(graph).reduce();
         } while (size > graph.size());
+    }
+
+    static std::string method() {
+        return "CrownEx";
     }
 };
 
@@ -353,25 +367,129 @@ void reduce(ProblemInstance instance) {
     std::cout << std::endl;
 }
 
-int main() {
-    int n, m;
-    std::cin >> n >> m;
+struct GeneratedInstance {
+    ProblemInstance instance;
+    std::string name;
+};
 
+template<class Reducer>
+void runTestImpl(const GeneratedInstance& test, std::vector<CellPtr>& row) {
+    ProblemInstance instance = test.instance;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    Reducer(instance).reduce();
+    auto finish = std::chrono::high_resolution_clock::now();
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+
+    char time[20];
+    std::sprintf(time, "%.03lf s", 1e-3 * duration.count());
+
+    row.push_back(make_cell<int>(instance.size()));
+    row.push_back(make_cell<std::string>(time));
+}
+
+template<class Reducer>
+void makeColumnsImpl(Table& t) {
+    t.addColumn(Column(Column::Header(Reducer::method(), { "size", "time" })));
+}
+
+template<class T, class... Args>
+struct KernelList {
+    KernelList<Args...> underlying_;
+
+    void runTest(const GeneratedInstance& test, std::vector<CellPtr>& row) {
+        runTestImpl<T>(test, row);
+        underlying_.runTest(test, row);
+    }
+
+    void makeColumns(Table& t) {
+        makeColumnsImpl<T>(t);
+        underlying_.makeColumns(t);
+    }
+};
+
+template<class T>
+struct KernelList<T> {
+    void runTest(const GeneratedInstance& test, std::vector<CellPtr>& row) {
+        runTestImpl<T>(test, row);
+    }
+
+    void makeColumns(Table& t) {
+        makeColumnsImpl<T>(t);
+    }
+};
+
+template<class KL>
+struct Kernels {
+    KL kernels;
+    std::vector<GeneratedInstance> tests;
+
+    void run() {
+        Table t;
+        t.addColumn(Column(Column::Header("Test", {})));
+        kernels.makeColumns(t);
+
+        for (const auto& test : tests) {
+            std::vector<CellPtr> row = {make_cell<std::string>(test.name)};
+            kernels.runTest(test, row);
+            t.addRow(row);
+        }
+
+        t.print();
+    }
+};
+
+template<class... Args>
+auto makeKernels(std::vector<GeneratedInstance>&& tests) {
+    return Kernels<KernelList<Args...> > { KernelList<Args...>(), tests };
+}
+
+std::mt19937 rnd(179);
+
+GeneratedInstance randomGraph(int n, int m) {
     ProblemInstance instance(n);
+    std::uniform_int_distribution<int> dist(0, n - 1);
+
     for (int i = 0; i < m; i++) {
         int u, v;
-        std::cin >> u >> v;
-        u--; v--;
-
+        do {
+            u = dist(rnd);
+            v = dist(rnd);
+        } while (u == v || instance.adjacent(u).count(v));
         instance.addEdge(u, v);
     }
 
-    std::cout << "=== LPKernel ===" << std::endl;
-    reduce<LPKernel>(instance);
-    std::cout << std::endl << "=== CrownKernel ===" << std::endl;
-    reduce<CrownKernel>(instance);
-    std::cout << std::endl << "=== ExhaustiveCrownKernel ===" << std::endl;
-    reduce<ExhaustiveCrownKernel>(instance);
+    std::ostringstream ss;
+    ss << "randomGraph(n = " << n << ", m = " << m << ")";
+    return { instance, ss.str() };
+}
+
+int main() {
+    std::vector<GeneratedInstance> tests = {
+        randomGraph(1000, 1000),
+        randomGraph(1000, 2000),
+        randomGraph(1000, 3000),
+        randomGraph(1000, 4000),
+        randomGraph(1000, 5000),
+        randomGraph(1000, 10000),
+        randomGraph(1000, 40000),
+        randomGraph(10000, 10000),
+        randomGraph(10000, 20000),
+        randomGraph(10000, 30000),
+        randomGraph(10000, 40000),
+        randomGraph(10000, 50000),
+        randomGraph(10000, 100000),
+        randomGraph(10000, 400000),
+    };
+
+    auto kernels = makeKernels<
+        LPKernel,
+        CrownKernel,
+        ExhaustiveCrownKernel
+    >(std::move(tests));
+
+    kernels.run();
 
     return 0;
 }
