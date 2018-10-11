@@ -40,16 +40,13 @@ public:
     }
 
     void takeVertex(int v) {
-        undecidedVertices.erase(v);
+        eraseVertexImpl(v);
         vertices[v].state = Vertex::State::DEFINETELY_IN;
     }
 
     void removeVertex(int v) {
-        undecidedVertices.erase(v);
+        eraseVertexImpl(v);
         vertices[v].state = Vertex::State::DEFINETELY_NOT;
-        for (int u : graph[v]) {
-            graph[u].erase(v);
-        }
     }
 
     const Set<int>& adjacent(int v) const {
@@ -69,6 +66,14 @@ public:
     }
 
 private:
+    void eraseVertexImpl(int v) {
+        undecidedVertices.erase(v);
+        vertices[v].state = Vertex::State::DEFINETELY_NOT;
+        for (int u : graph[v]) {
+            graph[u].erase(v);
+        }
+    }
+
     Set<int> undecidedVertices;
     std::vector<Vertex> vertices;
     std::vector<Set<int>> graph;
@@ -81,7 +86,8 @@ public:
         RIGHT
     };
 
-    using VC = std::vector<std::pair<int, Part>>;
+    using Vertex = std::pair<int, Part>;
+    using VC = std::vector<Vertex>;
 
 public:
     BipartiteGraph(int n, int m) : m(m), adj(n) {}
@@ -125,6 +131,7 @@ struct KuhnMaxMatchingFinder {
     std::vector<bool> vis;
     std::vector<int> pair;
     std::vector<bool> hasPair;
+    int size = 0;
 
     bool dfs(int v) {
         vis[v] = true;
@@ -149,7 +156,8 @@ struct KuhnMaxMatchingFinder {
         pair.resize(m, -1);
         for (int v = 0; v < n; ++v) {
             vis.assign(n, false);
-            dfs(v);
+            if (dfs(v))
+                size++;
         }
 
     }
@@ -174,7 +182,6 @@ struct VCFinder {
         }
     }
 
-
     VCFinder(const BipartiteGraph& graph) : graph(graph), maxm(graph) {
         n = graph.leftSize();
         m = graph.rightSize();
@@ -183,13 +190,17 @@ struct VCFinder {
     BipartiteGraph::VC find() {
         maxm.find();
 
-        int start = -1;
-        for (int v = 0; v < n && start == -1; ++v) {
-            if (!maxm.hasPair[v])
-                start = v;
+        vis.assign(n, false);
+        rvis.assign(m, false);
+        bool launched = false;
+        for (int v = 0; v < n; ++v) {
+            if (!maxm.hasPair[v] && !vis[v]) {
+                launched = true;
+                vcdfs(v);
+            }
         }
 
-        if (start == -1) {
+        if (!launched) {
             BipartiteGraph::VC ans;
             BipartiteGraph::Part part;
             if (n <= m) {
@@ -200,12 +211,10 @@ struct VCFinder {
             for (int i = 0; i < std::min(n, m); i++) {
                 ans.push_back(std::make_pair(i, part));
             }
+
+            assert(ans.size() == maxm.size);
             return ans;
         }
-
-        vis.assign(n, false);
-        rvis.assign(m, false);
-        vcdfs(start);
 
         BipartiteGraph::VC ans;
         for (int i = 0; i < n; i++) {
@@ -216,9 +225,13 @@ struct VCFinder {
             if (rvis[i])
                 ans.push_back(std::make_pair(i, BipartiteGraph::Part::RIGHT));
         }
+
+        assert(ans.size() == maxm.size);
         return ans;
     }
 };
+
+using MaxMatchingFinder = KuhnMaxMatchingFinder;
 
 struct LPKernel {
     ProblemInstance& graph;
@@ -227,7 +240,7 @@ struct LPKernel {
 
     void reduce() {
         BipartiteGraph bigraph(graph);
-        auto lpSolution = VCFinder<KuhnMaxMatchingFinder>(bigraph).find();
+        auto lpSolution = VCFinder<MaxMatchingFinder>(bigraph).find();
 
         std::vector<int> count(graph.realSize());
         for (auto p : lpSolution) {
@@ -243,6 +256,103 @@ struct LPKernel {
     }
 };
 
+struct CrownKernel {
+    ProblemInstance& graph;
+
+    CrownKernel(ProblemInstance& graph) : graph(graph) {}
+
+    void reduce() {
+        std::vector<bool> undecided(graph.realSize());
+        for (int u : graph.undecided())
+            undecided[u] = true;
+
+        std::vector<bool> covered(graph.realSize());
+        for (int u : graph.undecided())
+            for (int v : graph.adjacent(u)) {
+                if (!covered[u] && !covered[v]) {
+                    covered[u] = true;
+                    covered[v] = true;
+                }
+            }
+
+        std::vector<int> leftId, rightId;
+        std::vector<int> idInPart(graph.realSize());
+        for (int u : graph.undecided()) {
+            if (covered[u]) {
+                idInPart[u] = leftId.size();
+                leftId.push_back(u);
+            } else {
+                idInPart[u] = rightId.size();
+                rightId.push_back(u);
+            }
+        }
+
+        BipartiteGraph bigraph(leftId.size(), rightId.size());
+        for (int i = 0; i < (int)rightId.size(); i++) {
+            for (int u : graph.adjacent(rightId[i]))
+                bigraph.addEdge(idInPart[u], i);
+        }
+
+        VCFinder<MaxMatchingFinder> vcf(bigraph);
+        auto vc = vcf.find();
+
+        std::vector<bool> inVC(graph.realSize());
+        for (auto v : vc) {
+            auto& inPart = v.second == BipartiteGraph::Part::LEFT ? leftId : rightId;
+            inVC[inPart[v.first]] = true;
+        }
+
+        bool took = false;
+        for (int i = 0; i < (int)leftId.size(); i++) {
+            if (inVC[leftId[i]]) {
+                graph.takeVertex(leftId[i]);
+                took = true;
+            }
+        }
+        if (!took)
+            return;
+
+        for (int i = 0; i < (int)rightId.size(); i++) {
+            if (vcf.maxm.pair[i] != -1 && inVC[leftId[vcf.maxm.pair[i]]])
+                graph.removeVertex(rightId[i]);
+        }
+
+        auto iter = graph.undecided();
+        for (int u : iter)
+            if (graph.adjacent(u).empty())
+                graph.removeVertex(u);
+    }
+};
+
+struct ExhaustiveCrownKernel {
+    ProblemInstance& graph;
+
+    ExhaustiveCrownKernel(ProblemInstance& graph) : graph(graph) {}
+
+    void reduce() {
+        int size;
+        do {
+            size = graph.size();
+            CrownKernel(graph).reduce();
+        } while (size > graph.size());
+    }
+};
+
+template<class Reducer>
+void reduce(ProblemInstance instance) {
+    Reducer(instance).reduce();
+
+    std::cout << "Found kernel of size " << instance.size() << std::endl;
+    std::cout << "Took vertices: ";
+    for (int u : instance.getTook())
+        std::cout << u + 1 << " ";
+    std::cout << std::endl;
+    std::cout << "Undecided vertices: ";
+    for (int u : instance.undecided())
+        std::cout << u + 1 << " ";
+    std::cout << std::endl;
+}
+
 int main() {
     int n, m;
     std::cin >> n >> m;
@@ -256,17 +366,12 @@ int main() {
         instance.addEdge(u, v);
     }
 
-    LPKernel(instance).reduce();
-
-    std::cout << "Found kernel of size " << instance.size() << std::endl;
-    std::cout << "Took vertices: ";
-    for (int u : instance.getTook())
-        std::cout << u + 1 << " ";
-    std::cout << std::endl;
-    std::cout << "Undecided vertices: ";
-    for (int u : instance.undecided())
-        std::cout << u + 1 << " ";
-    std::cout << std::endl;
+    std::cout << "=== LPKernel ===" << std::endl;
+    reduce<LPKernel>(instance);
+    std::cout << std::endl << "=== CrownKernel ===" << std::endl;
+    reduce<CrownKernel>(instance);
+    std::cout << std::endl << "=== ExhaustiveCrownKernel ===" << std::endl;
+    reduce<ExhaustiveCrownKernel>(instance);
 
     return 0;
 }
