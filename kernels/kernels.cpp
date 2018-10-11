@@ -119,7 +119,7 @@ private:
 };
 
 // TODO: optimize
-struct KuhnVCFinder {
+struct KuhnMaxMatchingFinder {
     const BipartiteGraph& graph;
     int n, m;
     std::vector<bool> vis;
@@ -138,24 +138,12 @@ struct KuhnVCFinder {
         return false;
     }
 
-    std::vector<bool> rvis;
-    void vcdfs(int v) {
-        vis[v] = true;
-        for (int u : graph.adjacent(v)) {
-            if (rvis[u])
-                continue;
-            rvis[u] = true;
-            if (pair[u] != -1 && !vis[pair[u]])
-                vcdfs(pair[u]);
-        }
-    }
-
-    KuhnVCFinder(const BipartiteGraph& graph) : graph(graph) {
+    KuhnMaxMatchingFinder(const BipartiteGraph& graph) : graph(graph) {
         n = graph.leftSize();
         m = graph.rightSize();
     }
 
-    BipartiteGraph::VC find() {
+    void find() {
         hasPair.resize(n);
         vis.resize(n);
         pair.resize(m, -1);
@@ -164,9 +152,40 @@ struct KuhnVCFinder {
             dfs(v);
         }
 
+    }
+};
+
+template<class MaxMatchingFinder>
+struct VCFinder {
+    const BipartiteGraph& graph;
+    MaxMatchingFinder maxm;
+    int n, m;
+
+    std::vector<bool> vis;
+    std::vector<bool> rvis;
+    void vcdfs(int v) {
+        vis[v] = true;
+        for (int u : graph.adjacent(v)) {
+            if (rvis[u])
+                continue;
+            rvis[u] = true;
+            if (maxm.pair[u] != -1 && !vis[maxm.pair[u]])
+                vcdfs(maxm.pair[u]);
+        }
+    }
+
+
+    VCFinder(const BipartiteGraph& graph) : graph(graph), maxm(graph) {
+        n = graph.leftSize();
+        m = graph.rightSize();
+    }
+
+    BipartiteGraph::VC find() {
+        maxm.find();
+
         int start = -1;
         for (int v = 0; v < n && start == -1; ++v) {
-            if (!hasPair[v])
+            if (!maxm.hasPair[v])
                 start = v;
         }
 
@@ -201,16 +220,14 @@ struct KuhnVCFinder {
     }
 };
 
-using VCFinder = KuhnVCFinder;
-
-struct LPReducer {
+struct LPKernel {
     ProblemInstance& graph;
 
-    LPReducer(ProblemInstance& graph) : graph(graph) {}
+    LPKernel(ProblemInstance& graph) : graph(graph) {}
 
     void reduce() {
         BipartiteGraph bigraph(graph);
-        auto lpSolution = VCFinder(bigraph).find();
+        auto lpSolution = VCFinder<KuhnMaxMatchingFinder>(bigraph).find();
 
         std::vector<int> count(graph.realSize());
         for (auto p : lpSolution) {
@@ -239,7 +256,7 @@ int main() {
         instance.addEdge(u, v);
     }
 
-    LPReducer(instance).reduce();
+    LPKernel(instance).reduce();
 
     std::cout << "Found kernel of size " << instance.size() << std::endl;
     std::cout << "Took vertices: ";
