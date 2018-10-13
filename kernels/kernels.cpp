@@ -81,6 +81,19 @@ private:
     std::vector<Set<int>> graph;
 };
 
+std::istream& operator>>(std::istream& is, ProblemInstance& instance) {
+    int n, m;
+    is >> n >> m;
+    instance = ProblemInstance(n);
+    for (int i = 0; i < m; i++) {
+        int u, v;
+        is >> u >> v;
+        u--; v--;
+        instance.addEdge(u, v);
+    }
+    return is;
+}
+
 class BipartiteGraph {
 public:
     enum class Part {
@@ -262,12 +275,27 @@ struct LPKernel {
     }
 };
 
+struct IsolatedVerticesReducer {
+    ProblemInstance& graph;
+
+    IsolatedVerticesReducer(ProblemInstance& graph) : graph(graph) {}
+
+    void reduce() {
+        auto oldUndecided = graph.undecided();
+        for (int u : oldUndecided)
+            if (graph.adjacent(u).empty())
+                graph.removeVertex(u);
+    }
+};
+
 struct CrownKernel {
     ProblemInstance& graph;
 
     CrownKernel(ProblemInstance& graph) : graph(graph) {}
 
     void reduce() {
+        IsolatedVerticesReducer(graph).reduce();
+
         std::vector<bool> undecided(graph.realSize());
         for (int u : graph.undecided())
             undecided[u] = true;
@@ -356,6 +384,7 @@ template<class Reducer>
 void reduce(ProblemInstance instance) {
     Reducer(instance).reduce();
 
+    std::cout << "Using kernel `" << Reducer::method() << "`" << std::endl;
     std::cout << "Found kernel of size " << instance.size() << std::endl;
     std::cout << "Took vertices: ";
     for (int u : instance.getTook())
@@ -465,6 +494,34 @@ GeneratedInstance randomGraph(int n, int m) {
     return { instance, ss.str() };
 }
 
+GeneratedInstance graphWithPerfectMatching(int n, int m) {
+    assert(n % 2 == 0);
+    assert(m >= n / 2);
+
+    std::vector<int> vertexMap(n);
+    std::iota(vertexMap.begin(), vertexMap.end(), 0);
+    std::shuffle(vertexMap.begin(), vertexMap.end(), rnd);
+
+    ProblemInstance instance(n);
+    for (int i = 0; i < n; i += 2) {
+        instance.addEdge(vertexMap[i], vertexMap[i + 1]);
+    }
+
+    std::uniform_int_distribution<int> dist(0, n - 1);
+    for (int i = 0; i < m; i++) {
+        int u, v;
+        do {
+            u = dist(rnd);
+            v = dist(rnd);
+        } while (u == v || instance.adjacent(u).count(v));
+        instance.addEdge(u, v);
+    }
+
+    std::ostringstream ss;
+    ss << "graphWithPerfectMatching(n = " << n << ", m = " << m << ")";
+    return { instance, ss.str() };
+}
+
 int main() {
     std::vector<GeneratedInstance> tests = {
         randomGraph(1000, 1000),
@@ -481,6 +538,20 @@ int main() {
         randomGraph(10000, 50000),
         randomGraph(10000, 100000),
         randomGraph(10000, 400000),
+        graphWithPerfectMatching(1000, 1000),
+        graphWithPerfectMatching(1000, 2000),
+        graphWithPerfectMatching(1000, 3000),
+        graphWithPerfectMatching(1000, 4000),
+        graphWithPerfectMatching(1000, 5000),
+        graphWithPerfectMatching(1000, 10000),
+        graphWithPerfectMatching(1000, 40000),
+        graphWithPerfectMatching(10000, 10000),
+        graphWithPerfectMatching(10000, 20000),
+        graphWithPerfectMatching(10000, 30000),
+        graphWithPerfectMatching(10000, 40000),
+        graphWithPerfectMatching(10000, 50000),
+        graphWithPerfectMatching(10000, 100000),
+        graphWithPerfectMatching(10000, 400000),
     };
 
     auto kernels = makeKernels<
