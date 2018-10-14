@@ -36,7 +36,13 @@ public:
         return graph.size();
     }
 
+    int edgesNum() const {
+        return edges;
+    }
+
     void addEdge(int u, int v) {
+        if (!graph[u].count(v))
+            edges++;
         graph[u].insert(v);
         graph[v].insert(u);
     }
@@ -72,6 +78,7 @@ private:
         undecidedVertices.erase(v);
         vertices[v].state = Vertex::State::DEFINETELY_NOT;
         for (int u : graph[v]) {
+            edges--;
             graph[u].erase(v);
         }
     }
@@ -79,6 +86,7 @@ private:
     Set<int> undecidedVertices;
     std::vector<Vertex> vertices;
     std::vector<Set<int>> graph;
+    int edges = 0;
 };
 
 std::istream& operator>>(std::istream& is, ProblemInstance& instance) {
@@ -248,6 +256,29 @@ struct VCFinder {
 
 using MaxMatchingFinder = KuhnMaxMatchingFinder;
 
+namespace LPPrivate {
+    void reduceImpl(ProblemInstance& graph, const BipartiteGraph::VC& lpSolution) {
+        std::vector<int> count(graph.realSize());
+        for (auto p : lpSolution) {
+            count[p.first]++;
+        }
+
+        auto undecided = graph.undecided();
+        for (int i : undecided) {
+            if (count[i] == 0) {
+                graph.removeVertex(i);
+            } else if (count[i] == 2) {
+                graph.takeVertex(i);
+            }
+        }
+    }
+
+    void reduceImpl(ProblemInstance& graph, const BipartiteGraph& bigraph) {
+        auto lpSolution = VCFinder<MaxMatchingFinder>(bigraph).find();
+        reduceImpl(graph, lpSolution);
+    }
+}
+
 struct LPKernel {
     ProblemInstance& graph;
 
@@ -255,23 +286,63 @@ struct LPKernel {
 
     void reduce() {
         BipartiteGraph bigraph(graph);
-        auto lpSolution = VCFinder<MaxMatchingFinder>(bigraph).find();
-
-        std::vector<int> count(graph.realSize());
-        for (auto p : lpSolution) {
-            count[p.first]++;
-        }
-
-        for (int i = 0; i < graph.realSize(); i++) {
-            if (count[i] == 0)
-                graph.removeVertex(i);
-            else if (count[i] == 2)
-                graph.takeVertex(i);
-        }
+        LPPrivate::reduceImpl(graph, bigraph);
     }
 
     static std::string method() {
         return "LP";
+    }
+
+    bool disabled() {
+        return false;
+    }
+};
+
+struct ZeroSurplusLPKernel {
+    ProblemInstance& graph;
+
+    BipartiteGraph buildBpartiteGraphSkippingVertex(int u) {
+        BipartiteGraph result(graph.realSize(), graph.realSize());
+        for (int i : graph.undecided()) {
+            if (i == u)
+                continue;
+            for (int v : graph.adjacent(i)) {
+                if (u != v)
+                    result.addEdge(i, v);
+            }
+        }
+        return result;
+    }
+
+    ZeroSurplusLPKernel(ProblemInstance& graph) : graph(graph) {}
+
+    void reduce() {
+        LPKernel(graph).reduce();
+
+        while (true) {
+            bool found = false;
+            for (int u : graph.undecided()) {
+                auto bigraph = buildBpartiteGraphSkippingVertex(u);
+                auto lpSolution = VCFinder<MaxMatchingFinder>(bigraph).find();
+                if ((int)lpSolution.size() + 2 == graph.size()) {
+                    lpSolution.push_back({u, BipartiteGraph::Part::LEFT});
+                    lpSolution.push_back({u, BipartiteGraph::Part::RIGHT});
+                    LPPrivate::reduceImpl(graph, lpSolution);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                break;
+        }
+    }
+
+    static std::string method() {
+        return "ZeroSurplusLP";
+    }
+
+    bool disabled() {
+        return 1ll * graph.size() * graph.size() * graph.edgesNum() > 2e9;
     }
 };
 
@@ -360,6 +431,10 @@ struct CrownKernel {
     static std::string method() {
         return "Crown";
     }
+
+    bool disabled() {
+        return false;
+    }
 };
 
 struct ExhaustiveCrownKernel {
@@ -377,6 +452,10 @@ struct ExhaustiveCrownKernel {
 
     static std::string method() {
         return "CrownEx";
+    }
+
+    bool disabled() {
+        return false;
     }
 };
 
@@ -405,22 +484,32 @@ template<class Reducer>
 void runTestImpl(const GeneratedInstance& test, std::vector<CellPtr>& row) {
     ProblemInstance instance = test.instance;
 
-    auto start = std::chrono::high_resolution_clock::now();
-    Reducer(instance).reduce();
-    auto finish = std::chrono::high_resolution_clock::now();
+    Reducer reducer(instance);
+    if (reducer.disabled()) {
+        row.push_back(make_cell<std::string>("--"));
+        row.push_back(make_cell<std::string>("--"));
+        row.push_back(make_cell<std::string>("--"));
+    } else {
+        auto start = std::chrono::high_resolution_clock::now();
+        reducer.reduce();
+        auto end = std::chrono::high_resolution_clock::now();
 
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+        auto execTime = end - start;
 
-    char time[20];
-    std::sprintf(time, "%.03lf s", 1e-3 * duration.count());
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(execTime);
 
-    row.push_back(make_cell<int>(instance.size()));
-    row.push_back(make_cell<std::string>(time));
+        char time[20];
+        std::sprintf(time, "%.03lf s", 1e-3 * duration.count());
+
+        row.push_back(make_cell<int>(instance.size()));
+        row.push_back(make_cell<int>(instance.getTook().size()));
+        row.push_back(make_cell<std::string>(time));
+    }
 }
 
 template<class Reducer>
 void makeColumnsImpl(Table& t) {
-    t.addColumn(Column(Column::Header(Reducer::method(), { "size", "time" })));
+    t.addColumn(Column(Column::Header(Reducer::method(), { "size", "took", "time" })));
 }
 
 template<class T, class... Args>
@@ -524,6 +613,10 @@ GeneratedInstance graphWithPerfectMatching(int n, int m) {
 
 int main() {
     std::vector<GeneratedInstance> tests = {
+        randomGraph(100,  100),
+        randomGraph(100,  150),
+        randomGraph(100,  200),
+        randomGraph(100,  300),
         randomGraph(1000, 1000),
         randomGraph(1000, 2000),
         randomGraph(1000, 3000),
@@ -555,9 +648,10 @@ int main() {
     };
 
     auto kernels = makeKernels<
-        LPKernel,
         CrownKernel,
-        ExhaustiveCrownKernel
+        ExhaustiveCrownKernel,
+        LPKernel,
+        ZeroSurplusLPKernel
     >(std::move(tests));
 
     kernels.run();
