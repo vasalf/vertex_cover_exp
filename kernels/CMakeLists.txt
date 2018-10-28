@@ -5,4 +5,4 @@ add_executable(kernels
 target_include_directories(kernels PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../ascii_table/include
 )
-target_link_libraries(kernels LINK_PUBLIC ascii_table)
+target_link_libraries(kernels LINK_PUBLIC ascii_table vclib)
